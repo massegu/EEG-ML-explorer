@@ -198,7 +198,7 @@ Machine Learning
    │
    ▼
 Evaluación / Visualización
-´´´
+```
 
 ## ⚠️ Limitaciones y buenas prácticas
 
