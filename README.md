@@ -73,7 +73,7 @@ pip install -r requirements.txt
 
 # Ejecutar la app
 streamlit run app.py
-
+```bash
 
 ## 🧩 Funcionalidades principales
 # 1️⃣ Carga y visualización EEG
