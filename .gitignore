@@ -1,0 +1,23 @@
+# Entornos virtuales
+.venv/
+venv/
+
+# Cachés Python
+__pycache__/
+*.pyc
+
+# Datos EEG
+*.fif
+*.edf
+*.bdf
+*.set
+
+# Archivos grandes
+*.gif
+*.png
+
+# Streamlit
+.streamlit/
+
+# OS
+.DS_Store

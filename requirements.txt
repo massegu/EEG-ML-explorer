@@ -1,0 +1,12 @@
+streamlit
+numpy
+scipy
+pandas
+scikit-learn
+matplotlib
+seaborn
+mne
+pyedflib
+imageio
+imageio-ffmpeg
+plotly
