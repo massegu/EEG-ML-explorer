@@ -73,7 +73,7 @@ pip install -r requirements.txt
 
 # Ejecutar la app
 streamlit run app.py
-```bash
+```
 
 ## 🧩 Funcionalidades principales
 # 1️⃣ Carga y visualización EEG
@@ -171,7 +171,7 @@ Visualizaciones debug:
 cos(θ), sin(θ) vs tiempo
 
 ## Diagrama Pipeline
-
+```bash
 EEG (EDF)
    │
    ▼
@@ -198,7 +198,7 @@ Machine Learning
    │
    ▼
 Evaluación / Visualización
-
+´´´
 
 ## ⚠️ Limitaciones y buenas prácticas
 
