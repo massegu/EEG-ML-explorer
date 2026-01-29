@@ -3,28 +3,71 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import mne
 
-
-from src.eeg_io import load_edf_to_eegdata
-from src.features import welch_psd, bandpower_from_psd, pca_channels, DEFAULT_BANDS
+from src.eeg_io import EEGData, load_edf_bytes_to_eegdata
+from src.features import welch_psd, bandpower_from_psd, DEFAULT_BANDS
 from src.features import window_bandpower_features
 from src.viz import plot_topomap_band
 from src.montage import parse_custom_montage_csv, get_standard_coords
 from src.waves import traveling_wave_metrics
-from src.ml import generate_lr_labels
-from src.ml import evaluate_models
+from src.ml import generate_lr_labels, evaluate_models
 
 st.set_page_config(page_title="EEG App", layout="wide")
 st.title("EEG Analysis (Streamlit)")
 
-uploaded = st.file_uploader("Sube un EEG en EDF", type=["edf"])
-if not uploaded:
+# =========================
+# 1) Upload con límite + warning
+# =========================
+MAX_MB = 50
+HARD_MAX_MB = 200
+
+uploaded = st.file_uploader("Sube un EDF/EDF+ (.edf)", type=["edf"])
+
+if uploaded is None:
+    st.info("Sube un EDF para empezar.")
     st.stop()
 
-eeg = load_edf_to_eegdata(uploaded)
-st.success(f"Cargado: {len(eeg.ch_names)} canales | sfreq={eeg.sfreq:.2f} Hz | {eeg.X.shape[0]} muestras")
+size_mb = uploaded.size / (1024 * 1024)
 
+if uploaded.size > MAX_MB * 1024 * 1024:
+    st.warning(
+        f"Archivo grande: {size_mb:.1f} MB. "
+        f"Recomendado <= {MAX_MB} MB para la demo online. "
+        "Puede ir lento."
+    )
+
+if uploaded.size > HARD_MAX_MB * 1024 * 1024:
+    st.error(f"Archivo demasiado grande: {size_mb:.1f} MB. Límite: {HARD_MAX_MB} MB.")
+    st.stop()
+
+# =========================
+# 2) Selector de recorte (primeros X segundos)
+# =========================
+crop_on = st.checkbox("Recortar para la demo (primeros X segundos)", value=True)
+crop_sec = st.slider("Segundos a conservar", 5, 300, 60, step=5, disabled=not crop_on)
+
+# =========================
+# 3) Caching: carga + recorte
+# =========================
+@st.cache_data(show_spinner=False)
+def load_cached(edf_bytes: bytes, crop_on: bool, crop_sec: float) -> EEGData:
+    return load_edf_bytes_to_eegdata(
+        edf_bytes=edf_bytes,
+        crop_on=crop_on,
+        crop_sec=float(crop_sec),
+    )
+
+with st.spinner("Cargando EDF (con cache)…"):
+    eeg = load_cached(uploaded.getvalue(), crop_on, float(crop_sec))
+
+st.success(
+    f"Cargado ✅ {len(eeg.ch_names)} canales | {eeg.times[-1]:.1f}s | "
+    f"sfreq={eeg.sfreq:.2f} Hz | {eeg.X.shape[0]} muestras"
+)
+
+# =========================
+# Sidebar: selección de canales
+# =========================
 st.sidebar.header("Selección de canales EEG")
 
 default_1020 = [
@@ -47,12 +90,16 @@ if len(selected_channels) < 2:
     st.error("Selecciona al menos 2 canales EEG")
     st.stop()
 
-# Filtrar EEG a los canales seleccionados
+# Filtrar EEG a canales seleccionados
 idx = [eeg.ch_names.index(ch) for ch in selected_channels]
-
 eeg.X = eeg.X[:, idx]
 eeg.ch_names = [eeg.ch_names[i] for i in idx]
 
+# (Opcional pero recomendable) actualizar times sigue igual; sfreq no cambia
+
+# =========================
+# Pre-cálculos globales usados por varias tabs
+# =========================
 freqs, psd = welch_psd(eeg.X, eeg.sfreq, nperseg=2048)
 bp = bandpower_from_psd(freqs, psd, DEFAULT_BANDS)
 df_bp = pd.DataFrame(bp, index=eeg.ch_names)
