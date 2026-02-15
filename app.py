@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from src.eeg_io import EEGData, load_edf_bytes_to_eegdata
 from src.features import welch_psd, bandpower_from_psd, DEFAULT_BANDS
 from src.features import window_bandpower_features
+from src.features import pca_channels
 from src.viz import plot_topomap_band
 from src.montage import parse_custom_montage_csv, get_standard_coords
 from src.waves import traveling_wave_metrics
@@ -98,11 +99,26 @@ eeg.ch_names = [eeg.ch_names[i] for i in idx]
 # (Opcional pero recomendable) actualizar times sigue igual; sfreq no cambia
 
 # =========================
-# Pre-cálculos globales usados por varias tabs
+# Pre-cálculos globales (CACHEADOS)
 # =========================
-freqs, psd = welch_psd(eeg.X, eeg.sfreq, nperseg=2048)
-bp = bandpower_from_psd(freqs, psd, DEFAULT_BANDS)
+
+@st.cache_data(show_spinner=False)
+def cached_welch_psd(X: np.ndarray, sfreq: float, nperseg: int):
+    freqs, psd = welch_psd(X, sfreq, nperseg=nperseg)
+    return freqs, psd
+
+@st.cache_data(show_spinner=False)
+def cached_bandpower(freqs, psd, bands):
+    return bandpower_from_psd(freqs, psd, bands)
+
+# Ajusta nperseg según longitud real
+nper = min(2048, eeg.X.shape[0])
+
+freqs_all, psd_all = cached_welch_psd(eeg.X, eeg.sfreq, nper)
+bp = cached_bandpower(freqs_all, psd_all, DEFAULT_BANDS)
+
 df_bp = pd.DataFrame(bp, index=eeg.ch_names)
+
 
 
 tab1, tab2, tab3, tab4 = st.tabs(["Exploración", "Features/PCA", "ML", "Traveling Waves"])
@@ -126,16 +142,17 @@ with tab1:
 
     st.subheader("PSD (Welch)")
 
-    nper = min(2048, eeg.X.shape[0])
-    freqs, psd = welch_psd(eeg.X, eeg.sfreq, nperseg=nper)
-
     fig, ax = plt.subplots(figsize=(7, 3), dpi=150)
-    ax.semilogy(freqs, psd[ch_i])
+    ax.semilogy(freqs_all, psd_all[ch_i])
     ax.set_xlabel("Hz")
     ax.set_ylabel("PSD")
     ax.set_title(f"PSD canal: {ch_plot}")
     fig.tight_layout()
     st.pyplot(fig)
+
+    decim = max(1, int(eeg.sfreq / 200))
+    ax.plot(eeg.times[:n:decim], eeg.X[:n:decim, ch_i])
+
 
 
 #st.write("Nombres de canales:", eeg.ch_names)
@@ -317,93 +334,128 @@ with tab2:
                 band_ab = st.selectbox("Banda", list(DEFAULT_BANDS.keys()), index=list(DEFAULT_BANDS.keys()).index("alpha"), key="band_ab")
                 lo_ab, hi_ab = DEFAULT_BANDS[band_ab]
 
-            def parse_intervals_ab(text: str):
-                st.caption("Puedes escribir intervalos en líneas separadas o separados por ';' o '/'. Ej: 1,30,A / 20,50,B")
-                intervals = []
-                #Permitir separar por saltos de línea, ; o /
-                text =text.replace(";", "\n").replace("/", "\n")
-                for line in text.splitlines():
-                    line = line.strip()
-                    if not line or line.startswith("#"):
-                        continue
-                    parts = [p.strip() for p in line.split(",")]
-                    if len(parts) < 3:
-                        continue
-                    t0, t1, lab = float(parts[0]), float(parts[1]), parts[2]
-                    if lab not in ("A", "B"):
-                        continue
-                    intervals.append((t0, t1, lab))
-                    return intervals
+        def parse_intervals_ab(text: str):
+            st.caption("Puedes escribir intervalos en líneas separadas o separados por ';' o '/'. Ej: 1,30,A / 20,50,B")
 
-            intervals = parse_intervals_ab(ab_text)
-            if intervals:
-                # 1) features por ventana (bandpower por canal+banda)
-                Xw, t_centers_ab, feat_names_ab = window_bandpower_features(
-                    eeg.X, eeg.sfreq, eeg.ch_names,
-                    bands={band_ab: (lo_ab, hi_ab)},  # solo 1 banda -> features = n_channels
-                    win_sec=float(win_sec_ab),
-                    step_sec=float(step_sec_ab),
-                    nperseg=512
+            intervals = []
+            text = text.replace(";", "\n").replace("/", "\n")
+
+            for line in text.splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+
+                parts = [p.strip() for p in line.split(",")]
+                if len(parts) < 3:
+                    continue
+
+                try:
+                    t0 = float(parts[0])
+                    t1 = float(parts[1])
+                    lab = parts[2]
+                except ValueError:
+                    continue
+
+                if lab not in ("A", "B"):
+                    continue
+
+                intervals.append((t0, t1, lab))
+
+            return intervals
+
+intervals = parse_intervals_ab(ab_text)
+
+if intervals:
+    # 1) features por ventana (bandpower por canal+banda)
+    Xw, t_centers_ab, feat_names_ab = window_bandpower_features(
+        eeg.X, eeg.sfreq, eeg.ch_names,
+        bands={band_ab: (lo_ab, hi_ab)},  # 1 banda -> features = n_channels
+        win_sec=float(win_sec_ab),
+        step_sec=float(step_sec_ab),
+        nperseg=512
+    )
+
+    # columnas que corresponden a los canales con coords
+    idx_ch = [eeg.ch_names.index(ch) for ch in chs]
+    Xw_ch = Xw[:, idx_ch]
+
+    # 2) etiqueta A/B por ventana según intervalos
+    y_ab = np.array(["" for _ in t_centers_ab], dtype=object)
+    for t0i, t1i, lab in intervals:
+        mask = (t_centers_ab >= t0i) & (t_centers_ab < t1i)
+        y_ab[mask] = lab
+
+    keep = y_ab != ""
+    Xw_ch = Xw_ch[keep]
+    y_ab = y_ab[keep]
+
+    if Xw_ch.shape[0] < 2:
+        st.warning("Pocas ventanas etiquetadas. Ajusta intervalos o reduce step/ventana.")
+    else:
+        A = Xw_ch[y_ab == "A"]
+        B = Xw_ch[y_ab == "B"]
+
+        if len(A) < 2 or len(B) < 2:
+            st.warning(f"Necesitas >=2 ventanas por clase. Ahora: A={len(A)}, B={len(B)}.")
+        else:
+            valsA = np.mean(A, axis=0)
+            valsB = np.mean(B, axis=0)
+            valsD = valsA - valsB
+
+            mode_ab = st.radio(
+                "Escala",
+                ["lineal", "log10"],
+                index=1,
+                horizontal=True,
+                key="mode_ab"
+            )
+
+            if mode_ab == "log10":
+                valsA = np.log10(valsA + 1e-12)
+                valsB = np.log10(valsB + 1e-12)
+                valsD = valsA - valsB
+
+            cmap_seq = "viridis"
+            cmap_div = "RdBu_r"
+
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                figA = plot_topomap_band(
+                    valsA, chs, coords, eeg.sfreq,
+                    title=f"A ({band_ab})",
+                    cmap=cmap_seq,
+                    vlim=None,
+                    figsize=(2.8, 2.8)
                 )
-                # Xw: (n_windows, n_channels*1) => (n_windows, n_channels)
-                # Nos quedamos con las columnas correspondientes a canales con coords:
-                # feat_names_ab = ["Ch_band"] en orden eeg.ch_names
-                # Construimos índices por canal:
-                idx_ch = [eeg.ch_names.index(ch) for ch in chs]
-                # como hay 1 banda, la feature del canal ch está en la posición de su índice (mismo orden eeg.ch_names)
-                Xw_ch = Xw[:, idx_ch]  # (n_windows, n_chs)
+                st.pyplot(figA)
 
-                # 2) etiqueta A/B por ventana según intervalos
-                y_ab = np.array(["" for _ in t_centers_ab], dtype=object)
-                for t0, t1, lab in intervals:
-                    mask = (t_centers_ab >= t0) & (t_centers_ab < t1)
-                    y_ab[mask] = lab
+            with c2:
+                figB = plot_topomap_band(
+                    valsB, chs, coords, eeg.sfreq,
+                    title=f"B ({band_ab})",
+                    cmap=cmap_seq,
+                    vlim=None,
+                    figsize=(2.8, 2.8)
+                )
+                st.pyplot(figB)
 
-                keep = y_ab != ""
-                Xw_ch = Xw_ch[keep]
-                y_ab = y_ab[keep]
+            with c3:
+                vmax = float(np.nanmax(np.abs(valsD))) + 1e-12
+                figD = plot_topomap_band(
+                    valsD, chs, coords, eeg.sfreq,
+                    title="A − B",
+                    cmap=cmap_div,
+                    vlim=(-vmax, vmax),
+                    figsize=(2.8, 2.8)
+                )
+                st.pyplot(figD)
 
-                if Xw_ch.shape[0] < 2:
-                    st.warning("Pocas ventanas etiquetadas. Ajusta intervalos o reduce step/ventana.")
-                else:
-                    # 3) promedios por condición
-                    A = Xw_ch[y_ab == "A"]
-                    B = Xw_ch[y_ab == "B"]
-                    if len(A) < 2 or len(B) < 2:
-                        st.warning(f"Necesitas >=2 ventanas por clase. Ahora: A={len(A)}, B={len(B)}.")
-                    else:
-                        valsA = np.mean(A, axis=0)
-                        valsB = np.mean(B, axis=0)
-                        valsD = valsA - valsB  # diferencia
+            st.caption("Interpretación rápida: A−B > 0 (rojo) indica mayor potencia/valor en A respecto a B.")
+else:
+    st.info("Pega intervalos A/B para ver topomaps por condición.")
 
-                        # 4) modos de visualización
-                        mode_ab = st.radio("Escala", ["lineal", "log10"], index=1, horizontal=True, key="mode_ab")
-                        if mode_ab == "log10":
-                            valsA = np.log10(valsA + 1e-12)
-                            valsB = np.log10(valsB + 1e-12)
-                            # diferencia en log (Alog - Blog) = log(A/B) aprox
-                            valsD = valsA - valsB
-                        # 5) plot con tu helper plot_topomap_band
-                        cmap_seq = "viridis"
-                        cmap_div = "RdBu_r"
 
-                        c1, c2, c3 = st.columns(3)
-                        with c1:
-                            figA = plot_topomap_band(valsA, chs, coords, eeg.sfreq, title=f"A ({band_ab})", cmap=cmap_seq, vlim=None, figsize=(2.8, 2.8))
-                            st.pyplot(figA)
-                        with c2:
-                            figB = plot_topomap_band(valsB, chs, coords, eeg.sfreq, title=f"B ({band_ab})", cmap=cmap_seq, vlim=None, figsize=(2.8, 2.8))
-                            st.pyplot(figB)
-                        with c3:
-                            # vlim simétrico para diferencia
-                            vmax = float(np.nanmax(np.abs(valsD))) + 1e-12
-                            figD = plot_topomap_band(valsD, chs, coords, eeg.sfreq, title="A − B", cmap=cmap_div, vlim=(-vmax, vmax), figsize=(2.8, 2.8))
-                            st.pyplot(figD)
-
-                        st.caption("Interpretación rápida: A−B > 0 (rojo) indica mayor potencia/valor en A respecto a B.")
-            else:
-                    st.info("Pega intervalos A/B para ver topomaps por condición.")
-
+        
 with tab3:
     st.subheader("Entrenamiento ML (por ventanas temporales)")
     st.caption("Cada fila = una ventana temporal. Features = bandpower por canal y banda.")
