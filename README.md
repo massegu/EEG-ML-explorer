@@ -2,7 +2,7 @@
 
 Aplicación web interactiva para **análisis, visualización y modelado de señales EEG**, orientada a exploración científica, docencia y prototipado rápido de pipelines de neurociencia computacional.
 
-Desarrollada en **Python + Streamlit**, basada en **MNE-Python** y librerías estándar de análisis de señales y *machine learning*.
+Desarrollada en **Python + Streamlit**, basada en **MNE-Python** y librerías estándar de análisis de señales y _machine learning_.
 
 ---
 
@@ -11,10 +11,10 @@ Desarrollada en **Python + Streamlit**, basada en **MNE-Python** y librerías es
 EEG-ML Explorer permite:
 
 - Explorar señales EEG en formato estándar
-- Extraer *features* espectrales y espaciales
+- Extraer _features_ espectrales y espaciales
 - Visualizar topomaps y componentes
 - Comparar condiciones experimentales
-- Entrenar modelos de *machine learning* por ventanas temporales
+- Entrenar modelos de _machine learning_ por ventanas temporales
 - Analizar **traveling waves** (ondas viajeras corticales)
 - Exportar visualizaciones y animaciones (GIF)
 
@@ -28,6 +28,7 @@ Está pensada como **herramienta exploratoria**, no como pipeline clínico cerra
   (vía `mne.io.read_raw_edf`)
 
 Opcionalmente:
+
 - CSV de coordenadas personalizadas para montajes EEG
 
 ---
@@ -51,6 +52,7 @@ Opcionalmente:
 - Windows
 
 Probado con:
+
 - MNE-Python ≥ 1.5
 - Streamlit ≥ 1.30
 
@@ -75,8 +77,16 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
+## 🚀 Demo online
+
+Puedes probar la aplicación aquí:
+
+👉 https://EEG-ML-explorer.streamlit.app
+
 ## 🧩 Funcionalidades principales
+
 # 1️⃣ Carga y visualización EEG
+
 Carga de archivos EDF
 
 Inspección básica de señales
@@ -86,6 +96,7 @@ Selección de canales
 Montaje estándar (10–20 / 10–05) o personalizado
 
 # 2️⃣ Features espectrales y espaciales
+
 Cálculo de PSD (Welch)
 
 Bandpower por canal y banda
@@ -103,6 +114,7 @@ z-score espacial
 Normalización y comparación visual
 
 # 3️⃣ PCA sobre canales
+
 PCA aplicado a la matriz EEG (canales como variables)
 
 Visualización de componentes temporales
@@ -112,6 +124,7 @@ Explained variance ratio
 PCA no equivale a canales: los componentes son combinaciones espaciales de canales
 
 # 4️⃣ Comparación de condiciones (A vs B)
+
 Definición manual de intervalos temporales
 
 Comparación topográfica entre condiciones
@@ -125,6 +138,7 @@ B
 A − B (colormap divergente)
 
 # 5️⃣ Machine Learning por ventanas temporales
+
 Segmentación en ventanas deslizantes
 
 Features:
@@ -146,6 +160,7 @@ Validación cruzada automática
 Selección del mejor modelo
 
 # 6️⃣ Traveling Waves (ondas viajeras)
+
 Estimación de:
 
 Dirección (θ)
@@ -171,6 +186,7 @@ Visualizaciones debug:
 cos(θ), sin(θ) vs tiempo
 
 ## Diagrama Pipeline
+
 ```bash
 EEG (EDF)
    │
