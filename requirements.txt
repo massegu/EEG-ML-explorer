@@ -8,5 +8,5 @@ seaborn
 mne
 pyedflib
 imageio
-imageio-ffmpeg
+#imageio-ffmpeg
 plotly
