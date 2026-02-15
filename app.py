@@ -221,8 +221,7 @@ with tab2:
             index=1,
             help="lineal/log10 muestran magnitud; z-score muestra patrón relativo (media=0, sd=1)."
         )
-    
-        # ✅ AQUÍ VA LA NOTA PEDAGÓGICA
+
         if mode == "lineal":
             st.info("**Lineal**: potencia absoluta. Útil para ver magnitudes reales y detectar canales anómalos.")
         elif mode == "log10":
@@ -230,19 +229,16 @@ with tab2:
         else:
             st.info("**Z-score (espacial)**: muestra patrón relativo (media=0, sd=1). Pierde escala absoluta; ideal para comparar topografías.")
 
-        # colormap
-
         if mode.startswith("z"):
             cmap = "RdBu_r"
-            st.caption("Modo z-score: colormap fijado a RdBu_r (divergente) para resaltar valores por encima/debajo de la media.")
+            st.caption("Modo z-score: colormap fijado a RdBu_r (divergente).")
         else:
             cmap = st.selectbox(
-            "Colormap",
+                "Colormap",
                 ["viridis", "plasma", "inferno", "magma"],
                 index=0
             )
-        # coords (standard)
-        from src.montage import get_standard_coords
+
         coords = get_standard_coords(eeg.ch_names)
         chs = [ch for ch in eeg.ch_names if ch in coords]
 
@@ -252,25 +248,16 @@ with tab2:
             if missing:
                 st.caption("Sin coordenadas: " + ", ".join(missing))
         else:
-            # valores base (lineales)
             values = np.array([float(df_bp.loc[ch, band_topo]) for ch in chs], dtype=float)
 
-            # aplicar modo (solo para el topomap)
-            
             if mode == "log10":
                 values = np.log10(values + 1e-12)
             elif mode.startswith("z"):
                 mu = float(np.mean(values))
                 sd = float(np.std(values) + 1e-12)
                 values = (values - mu) / sd
-                # para z-score, casi siempre tiene sentido un divergente:
-                # si quieres forzarlo:
-                # cmap = "RdBu_r"
 
-            # si es z-score, vlim simétrico ayuda
             vlim = (-3, 3) if mode.startswith("z") else None
-
-            import mne
 
             info = mne.create_info(ch_names=chs, sfreq=eeg.sfreq, ch_types=["eeg"] * len(chs))
             mont = mne.channels.make_dig_montage({ch: coords[ch] for ch in chs}, coord_frame="head")
@@ -281,8 +268,6 @@ with tab2:
             if vlim is None:
                 ret = mne.viz.plot_topomap(values, info, axes=ax, show=False, cmap=cmap)
             else:
-                # compatibilidad: algunas versiones usan vlim, otras vmin/vmax.
-                # Probamos vlim primero:
                 try:
                     ret = mne.viz.plot_topomap(values, info, axes=ax, show=False, cmap=cmap, vlim=vlim)
                 except TypeError:
@@ -291,8 +276,6 @@ with tab2:
             im = ret[0] if isinstance(ret, tuple) else ret
             fig.colorbar(im, ax=ax, shrink=0.75)
 
-            # nombres manuales (compatibilidad con tu MNE)
-            
             pos = np.array([coords[ch][:2] for ch in chs], dtype=float)
             for (x, y), ch in zip(pos, chs):
                 ax.text(x, y, ch, fontsize=7, ha="center", va="center")
@@ -300,86 +283,167 @@ with tab2:
             ax.set_title(f"{band_topo} ({mode})")
             fig.tight_layout()
             st.pyplot(fig)
- 
+
             # botón de descarga PNG
             import io
             buf = io.BytesIO()
             fig.savefig(buf, format="png", dpi=200, bbox_inches="tight")
             st.download_button(
-             "Descargar topomap (PNG)",
-            data=buf.getvalue(),
-            file_name=f"topomap_{band_topo}_{mode}.png",
-            mime="image/png"
+                "Descargar topomap (PNG)",
+                data=buf.getvalue(),
+                file_name=f"topomap_{band_topo}_{mode}.png",
+                mime="image/png"
             )
 
-            # -------------------------
-            # Comparación de bandas (lado a lado)
-            # -------------------------
-            st.subheader("Comparación A vs B (topomaps)")
+    # =========================================================
+    # Comparación A vs B (topomaps) ✅ (AQUÍ ya estamos a nivel tab2)
+    # =========================================================
+    st.subheader("Comparación A vs B (topomaps)")
 
-            if len(chs) < 4:
-                st.warning("No se puede hacer comparación A vs B: faltan coordenadas suficientes.")
+    from scipy.stats import ttest_ind
+
+    def parse_intervals_ab(text: str):
+        intervals = []
+        text = (text or "").replace(";", "\n").replace("/", "\n")
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) < 3:
+                continue
+            try:
+                t0, t1 = float(parts[0]), float(parts[1])
+                lab = parts[2].upper()
+            except Exception:
+                continue
+            if lab not in ("A", "B"):
+                continue
+            if t1 <= t0:
+                continue
+            intervals.append((t0, t1, lab))
+        return intervals
+
+    def cohen_d_independent(A: np.ndarray, B: np.ndarray) -> np.ndarray:
+        A = np.asarray(A, float)
+        B = np.asarray(B, float)
+        muA = np.nanmean(A, axis=0)
+        muB = np.nanmean(B, axis=0)
+        sA = np.nanstd(A, axis=0, ddof=1)
+        sB = np.nanstd(B, axis=0, ddof=1)
+        nA = A.shape[0]
+        nB = B.shape[0]
+        sp = np.sqrt(((nA - 1) * (sA ** 2) + (nB - 1) * (sB ** 2)) / max(1, (nA + nB - 2)))
+        return (muA - muB) / (sp + 1e-12)
+
+    def fdr_bh(pvals: np.ndarray, alpha: float = 0.05):
+        p = np.asarray(pvals, float)
+        m = p.size
+        order = np.argsort(p)
+        ranked = p[order]
+        thresh = alpha * (np.arange(1, m + 1) / m)
+
+        reject = ranked <= thresh
+        if not np.any(reject):
+            return np.zeros_like(p, dtype=bool), np.full_like(p, np.nan)
+
+        kmax = np.max(np.where(reject)[0])
+        cutoff = ranked[kmax]
+        reject_mask = p <= cutoff
+
+        p_adj = np.empty_like(ranked)
+        prev = 1.0
+        for i in range(m - 1, -1, -1):
+            val = ranked[i] * m / (i + 1)
+            prev = min(prev, val)
+            p_adj[i] = prev
+
+        p_adj_full = np.empty_like(p)
+        p_adj_full[order] = p_adj
+        return reject_mask, p_adj_full
+
+    st.caption("Formato: t0,t1,label (seg). label debe ser A o B. Separadores: líneas, ';' o '/'. Ej: 0,30,A / 30,60,B")
+
+    with st.expander("⚙ Intervalos automáticos (recomendado para demo)", expanded=True):
+        auto_on = st.checkbox("Generar intervalos automáticamente", value=False, key="ab_auto_on")
+        auto_mode = st.selectbox(
+            "Modo",
+            ["Mitad A / Mitad B", "Alternancia por bloques (A,B,A,B...)", "N bloques iguales + asignación manual"],
+            index=0,
+            disabled=not auto_on,
+            key="ab_auto_mode"
+        )
+
+        t_total = float(eeg.times[-1])
+        if auto_on:
+            if auto_mode == "Mitad A / Mitad B":
+                mid = t_total / 2
+                auto_intervals = [(0.0, mid, "A"), (mid, t_total, "B")]
+            elif auto_mode == "Alternancia por bloques (A,B,A,B...)":
+                block_sec = st.number_input("Duración de bloque (s)", 0.5, 60.0, 5.0, 0.5, key="ab_block_sec", disabled=not auto_on)
+                auto_intervals = []
+                t0i = 0.0
+                k = 0
+                while t0i < t_total:
+                    t1i = min(t_total, t0i + float(block_sec))
+                    lab = "A" if (k % 2 == 0) else "B"
+                    auto_intervals.append((t0i, t1i, lab))
+                    t0i = t1i
+                    k += 1
             else:
-                st.caption("Define intervalos de dos condiciones (A y B). Formato: t0,t1,label (seg). Label debe ser A o B. Ej:\n0,30,A\n30,60,B")
+                n_blocks = st.slider("N bloques", 2, 20, 6, key="ab_n_blocks", disabled=not auto_on)
+                block_len = t_total / int(n_blocks)
+                pattern = st.text_input("Patrón A/B (ej: AABBAB)", value="AB" * (int(n_blocks) // 2), key="ab_pattern", disabled=not auto_on)
+                pattern = (pattern.upper().replace(" ", ""))[:int(n_blocks)]
+                if len(pattern) < int(n_blocks):
+                    pattern = (pattern + ("AB" * 50))[:int(n_blocks)]
 
-            ab_text = st.text_area("Intervalos A/B", value="", height=140)
+                auto_intervals = []
+                for i in range(int(n_blocks)):
+                    t0i = i * block_len
+                    t1i = (i + 1) * block_len if i < int(n_blocks) - 1 else t_total
+                    lab = "A" if pattern[i] == "A" else "B"
+                    auto_intervals.append((t0i, t1i, lab))
 
-            # parámetros de ventana para el cálculo por condición
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                win_sec_ab = st.number_input("Ventana A/B (s)", 0.5, 30.0, 2.0, 0.5, key="win_ab")
-            with col2:
-                step_sec_ab = st.number_input("Paso A/B (s)", 0.1, 30.0, 1.0, 0.1, key="step_ab")
-            with col3:
-                band_ab = st.selectbox("Banda", list(DEFAULT_BANDS.keys()), index=list(DEFAULT_BANDS.keys()).index("alpha"), key="band_ab")
-                lo_ab, hi_ab = DEFAULT_BANDS[band_ab]
+            st.write("Intervalos generados:")
+            st.code("\n".join([f"{a:.2f},{b:.2f},{c}" for a, b, c in auto_intervals]))
+            ab_text_default = "\n".join([f"{a:.4f},{b:.4f},{c}" for a, b, c in auto_intervals])
+        else:
+            ab_text_default = ""
 
-        def parse_intervals_ab(text: str):
-            st.caption("Puedes escribir intervalos en líneas separadas o separados por ';' o '/'. Ej: 1,30,A / 20,50,B")
+    ab_text = st.text_area("Intervalos A/B", value=ab_text_default, height=140, key="ab_text")
 
-            intervals = []
-            text = text.replace(";", "\n").replace("/", "\n")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        win_sec_ab = st.number_input("Ventana A/B (s)", 0.5, 30.0, 2.0, 0.5, key="win_ab")
+    with col2:
+        step_sec_ab = st.number_input("Paso A/B (s)", 0.1, 30.0, 1.0, 0.1, key="step_ab")
+    with col3:
+        band_ab = st.selectbox("Banda", list(DEFAULT_BANDS.keys()), index=list(DEFAULT_BANDS.keys()).index("alpha"), key="band_ab")
+        lo_ab, hi_ab = DEFAULT_BANDS[band_ab]
 
-            for line in text.splitlines():
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
+    intervals = parse_intervals_ab(ab_text)
+    if not intervals:
+        st.info("Pega intervalos A/B o activa intervalos automáticos.")
+        st.stop()
 
-                parts = [p.strip() for p in line.split(",")]
-                if len(parts) < 3:
-                    continue
-
-                try:
-                    t0 = float(parts[0])
-                    t1 = float(parts[1])
-                    lab = parts[2]
-                except ValueError:
-                    continue
-
-                if lab not in ("A", "B"):
-                    continue
-
-                intervals.append((t0, t1, lab))
-
-            return intervals
-
-intervals = parse_intervals_ab(ab_text)
-
-if intervals:
-    # 1) features por ventana (bandpower por canal+banda)
-    Xw, t_centers_ab, feat_names_ab = window_bandpower_features(
+    Xw, t_centers_ab, _ = window_bandpower_features(
         eeg.X, eeg.sfreq, eeg.ch_names,
-        bands={band_ab: (lo_ab, hi_ab)},  # 1 banda -> features = n_channels
+        bands={band_ab: (lo_ab, hi_ab)},
         win_sec=float(win_sec_ab),
         step_sec=float(step_sec_ab),
         nperseg=512
     )
 
-    # columnas que corresponden a los canales con coords
-    idx_ch = [eeg.ch_names.index(ch) for ch in chs]
+    coords_ab = get_standard_coords(eeg.ch_names)
+    chs_ab = [ch for ch in eeg.ch_names if ch in coords_ab]
+    if len(chs_ab) < 4:
+        st.warning(f"No hay suficientes canales con coordenadas para topomap: {len(chs_ab)} / {len(eeg.ch_names)}")
+        st.stop()
+
+    idx_ch = [eeg.ch_names.index(ch) for ch in chs_ab]
     Xw_ch = Xw[:, idx_ch]
 
-    # 2) etiqueta A/B por ventana según intervalos
     y_ab = np.array(["" for _ in t_centers_ab], dtype=object)
     for t0i, t1i, lab in intervals:
         mask = (t_centers_ab >= t0i) & (t_centers_ab < t1i)
@@ -388,73 +452,97 @@ if intervals:
     keep = y_ab != ""
     Xw_ch = Xw_ch[keep]
     y_ab = y_ab[keep]
+    t_keep = t_centers_ab[keep]
 
-    if Xw_ch.shape[0] < 2:
-        st.warning("Pocas ventanas etiquetadas. Ajusta intervalos o reduce step/ventana.")
+    with st.expander("🧪 Debug: etiquetas por ventana", expanded=False):
+        fig = plt.figure(figsize=(7, 2), dpi=130)
+        classes = {"A": 0, "B": 1}
+        yy = np.array([classes[v] for v in y_ab], int)
+        plt.plot(t_keep, yy, marker=".", linestyle="none")
+        plt.yticks([0, 1], ["A", "B"])
+        plt.xlabel("Tiempo (s)")
+        plt.title("Etiquetas por ventana (A/B)")
+        st.pyplot(fig)
+
+    A = Xw_ch[y_ab == "A"]
+    B = Xw_ch[y_ab == "B"]
+
+    if len(A) < 2 or len(B) < 2:
+        st.warning(f"Necesitas >=2 ventanas por clase. Ahora: A={len(A)}, B={len(B)}.")
+        st.stop()
+
+    muA = np.mean(A, axis=0)
+    muB = np.mean(B, axis=0)
+    diff = muA - muB
+    d = cohen_d_independent(A, B)
+
+    t_stat, pvals = ttest_ind(A, B, axis=0, equal_var=False, nan_policy="omit")
+
+    colS1, colS2 = st.columns([1.2, 1.0])
+    with colS1:
+        alpha = st.slider("α (significación)", 0.001, 0.2, 0.05, step=0.005, key="ab_alpha")
+    with colS2:
+        corr = st.selectbox("Corrección", ["sin corregir", "FDR (Benjamini–Hochberg)"], index=1, key="ab_corr")
+
+    if corr.startswith("FDR"):
+        sig_mask, p_adj = fdr_bh(pvals, alpha=float(alpha))
+        p_show = p_adj
     else:
-        A = Xw_ch[y_ab == "A"]
-        B = Xw_ch[y_ab == "B"]
+        sig_mask = pvals < float(alpha)
+        p_show = pvals
 
-        if len(A) < 2 or len(B) < 2:
-            st.warning(f"Necesitas >=2 ventanas por clase. Ahora: A={len(A)}, B={len(B)}.")
-        else:
-            valsA = np.mean(A, axis=0)
-            valsB = np.mean(B, axis=0)
-            valsD = valsA - valsB
+    st.subheader("Mapas A / B / A−B / Cohen’s d / p-values")
 
-            mode_ab = st.radio(
-                "Escala",
-                ["lineal", "log10"],
-                index=1,
-                horizontal=True,
-                key="mode_ab"
-            )
+    mode_ab = st.radio("Escala A y B", ["lineal", "log10"], index=1, horizontal=True, key="mode_ab")
 
-            if mode_ab == "log10":
-                valsA = np.log10(valsA + 1e-12)
-                valsB = np.log10(valsB + 1e-12)
-                valsD = valsA - valsB
+    A_map = muA.copy()
+    B_map = muB.copy()
+    D_map = diff.copy()
 
-            cmap_seq = "viridis"
-            cmap_div = "RdBu_r"
+    if mode_ab == "log10":
+        A_map = np.log10(A_map + 1e-12)
+        B_map = np.log10(B_map + 1e-12)
+        D_map = A_map - B_map
 
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                figA = plot_topomap_band(
-                    valsA, chs, coords, eeg.sfreq,
-                    title=f"A ({band_ab})",
-                    cmap=cmap_seq,
-                    vlim=None,
-                    figsize=(2.8, 2.8)
-                )
-                st.pyplot(figA)
+    p_plot = -np.log10(p_show + 1e-300)
 
-            with c2:
-                figB = plot_topomap_band(
-                    valsB, chs, coords, eeg.sfreq,
-                    title=f"B ({band_ab})",
-                    cmap=cmap_seq,
-                    vlim=None,
-                    figsize=(2.8, 2.8)
-                )
-                st.pyplot(figB)
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        figA = plot_topomap_band(A_map, chs_ab, coords_ab, eeg.sfreq, title=f"A ({band_ab})", cmap="viridis", vlim=None, figsize=(2.8, 2.8))
+        st.pyplot(figA)
+    with c2:
+        figB = plot_topomap_band(B_map, chs_ab, coords_ab, eeg.sfreq, title=f"B ({band_ab})", cmap="viridis", vlim=None, figsize=(2.8, 2.8))
+        st.pyplot(figB)
+    with c3:
+        vmax = float(np.nanmax(np.abs(D_map))) + 1e-12
+        figD = plot_topomap_band(D_map, chs_ab, coords_ab, eeg.sfreq, title="A − B", cmap="RdBu_r", vlim=(-vmax, vmax), figsize=(2.8, 2.8))
+        st.pyplot(figD)
 
-            with c3:
-                vmax = float(np.nanmax(np.abs(valsD))) + 1e-12
-                figD = plot_topomap_band(
-                    valsD, chs, coords, eeg.sfreq,
-                    title="A − B",
-                    cmap=cmap_div,
-                    vlim=(-vmax, vmax),
-                    figsize=(2.8, 2.8)
-                )
-                st.pyplot(figD)
+    c4, c5, c6 = st.columns(3)
+    with c4:
+        vmax_d = float(np.nanmax(np.abs(d))) + 1e-12
+        figd = plot_topomap_band(d, chs_ab, coords_ab, eeg.sfreq, title="Cohen’s d", cmap="RdBu_r", vlim=(-vmax_d, vmax_d), figsize=(2.8, 2.8))
+        st.pyplot(figd)
 
-            st.caption("Interpretación rápida: A−B > 0 (rojo) indica mayor potencia/valor en A respecto a B.")
-else:
-    st.info("Pega intervalos A/B para ver topomaps por condición.")
+    with c5:
+        vmax_p = float(np.nanmax(p_plot)) + 1e-12
+        figp = plot_topomap_band(p_plot, chs_ab, coords_ab, eeg.sfreq, title="-log10(p)", cmap="magma", vlim=(0.0, vmax_p), figsize=(2.8, 2.8))
+        st.pyplot(figp)
 
+    with c6:
+        d_sig = d.copy()
+        d_sig[~sig_mask] = 0.0
+        vmax_ds = float(np.nanmax(np.abs(d_sig))) + 1e-12
+        figds = plot_topomap_band(d_sig, chs_ab, coords_ab, eeg.sfreq, title="d (solo significativo)", cmap="RdBu_r", vlim=(-vmax_ds, vmax_ds), figsize=(2.8, 2.8))
+        st.pyplot(figds)
 
+    st.caption(
+        "Interpretación:\n"
+        "- **A−B**: diferencia cruda (o log-ratio si estás en log10).\n"
+        "- **Cohen’s d**: tamaño de efecto normalizado.\n"
+        "- **-log10(p)**: significación (más alto = p más pequeño).\n"
+        "- **d solo significativo**: efecto mostrado solo donde pasa el umbral."
+    )
         
 with tab3:
     st.subheader("Entrenamiento ML (por ventanas temporales)")
