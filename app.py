@@ -3,6 +3,7 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import mne
 
 from src.eeg_io import EEGData, load_edf_bytes_to_eegdata
 from src.features import welch_psd, bandpower_from_psd, DEFAULT_BANDS
