@@ -13,6 +13,8 @@ from src.viz import plot_topomap_band
 from src.montage import parse_custom_montage_csv, get_standard_coords
 from src.waves import traveling_wave_metrics
 from src.ml import generate_lr_labels, evaluate_models
+from sklearn.model_selection import StratifiedGroupKFold, KFold
+from sklearn.inspection import permutation_importance
 
 st.set_page_config(page_title="EEG App", layout="wide")
 st.title("EEG Analysis (Streamlit)")
@@ -569,6 +571,13 @@ with tab3:
         nperseg=int(nperseg)
     )
 
+    with st.expander("Ver nombres de features (feat_names)", expanded=False):
+        st.dataframe(pd.DataFrame({"feature": feat_names}).head(50), use_container_width=True)
+
+    st.write("Nº features:", len(feat_names))
+    st.write("feat_names[:10]:", feat_names[:10])
+
+
     if X_feat.shape[0] < 2:
         st.error("No hay suficientes ventanas. Reduce win_sec o step_sec.")
         st.stop()
@@ -758,7 +767,177 @@ with tab3:
         res = evaluate_models(X_feat, y, task=task, cv=cv)
         st.write("Scores:", res.scores)
         st.success(f"Mejor modelo: {res.best_name}")
+        
+        model = res.best_estimator
 
+        # -------------------------
+        # Importancia de variables (Permutation Importance)
+        # -------------------------
+        st.markdown("---")
+        st.subheader("Qué variables aportan más información (Permutation Importance)")
+
+        st.caption(
+            "Importancia predictiva ≠ relevancia neurofisiológica."
+            "Además, esta app NO hace limpieza avanzada de artefactos (ICA/ASR/etc.), "
+            "así que algunas variables pueden capturar ruido (p. ej., EMG en beta)."
+            "La importancia se calcula usando el modelo ganador con validación cruzada independiente."
+        )
+
+        # Controles
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            do_perm = st.checkbox("Calcular importancias", value=True, key="ml_do_perm")
+        with col2:
+            n_repeats = st.slider("Permutaciones", 5, 50, 20, 5, key="ml_perm_repeats")
+        with col3:
+            top_n = st.slider("Top N", 5, 50, 15, 1, key="ml_perm_topn")
+        with col4:
+            # scorings razonables por tarea
+            if task == "classification":
+                scoring = st.selectbox("Scoring", ["roc_auc", "accuracy", "f1_macro"], index=0, key="ml_perm_scoring")
+            else:
+                scoring = st.selectbox("Scoring", ["r2", "neg_mean_absolute_error", "neg_root_mean_squared_error"], index=0, key="ml_perm_scoring")
+
+        if do_perm:
+            # 1) Recuperar el mejor estimador
+            #    Ajusta esto a tu implementación de evaluate_models:
+            #    - Opción A: res.best_estimator existe
+            #    - Opción B: res.best_model existe
+            #    - Opción C: res.models[res.best_name] existe
+            model = None
+            if hasattr(res, "best_estimator") and res.best_estimator is not None:
+                model = res.best_estimator
+            elif hasattr(res, "best_model") and res.best_model is not None:
+                model = res.best_model
+            elif hasattr(res, "models") and isinstance(res.models, dict) and res.best_name in res.models:
+                model = res.models[res.best_name]
+
+            if model is None:
+                st.error(
+                    "No puedo recuperar el modelo ganador desde `res`. "
+                    "Solución rápida: haz que `evaluate_models` devuelva también `best_estimator`."
+                )
+            else:
+                # 2) Preparar X/y + nombres
+                X = X_feat
+                feature_names = list(feat_names)
+
+                # 3) Definir CV coherente con la tarea
+                if task == "classification":
+                    cv_obj = StratifiedKFold(n_splits=cv, shuffle=True, random_state=42)
+                else:
+                    cv_obj = KFold(n_splits=cv, shuffle=True, random_state=42)
+
+                # 4) Calcular permutation importance en cada fold y promediar
+                importances = []
+                for tr, te in cv_obj.split(X, y):
+                    X_train, X_test = X[tr], X[te]
+                    y_train, y_test = y[tr], y[te]
+
+                    model.fit(X_train, y_train)
+
+                    pi = permutation_importance(
+                        model,
+                        X_test,
+                        y_test,
+                        n_repeats=int(n_repeats),
+                        random_state=42,
+                        scoring=scoring,
+                    )
+                    importances.append(pi.importances_mean)
+
+                importances = np.asarray(importances)
+                mean_imp = np.nanmean(importances, axis=0)
+                std_imp = np.nanstd(importances, axis=0)
+
+                df_imp = pd.DataFrame({
+                    "feature": feature_names,
+                    "importance_mean": mean_imp,
+                    "importance_std": std_imp,
+                }).sort_values("importance_mean", ascending=False)
+                
+                        # -------------------------
+        # Neuro-friendly: agregados por BANDA y por CANAL
+        # -------------------------
+        # --- 1) Top variables (detalle fino) ---
+                st.write("Top variables (media ± desviación entre folds):")
+                st.dataframe(df_imp.head(top_n), use_container_width=True)
+                st.bar_chart(df_imp.head(top_n).set_index("feature")["importance_mean"])
+
+        # --- 2) Neuro-friendly: agregados por BANDA y por CANAL ---
+                st.markdown("### Vista neuro-friendly: importancia por banda y por canal")
+
+                band_keys = list(DEFAULT_BANDS.keys())  # ["delta","theta","alpha",...]
+                ch_set = set(eeg.ch_names)
+
+                def parse_feature(feat: str):
+                    """
+                    Intenta inferir (canal, banda) para features tipo 'F3_alpha' / 'alpha_F3' / 'F3-alpha'.
+                    Devuelve (ch, band) o (None, None) si no aplica (TW/spatial/otros).
+                    """
+                    s = feat.replace("-", "_").replace(" ", "_")
+                    parts = [p for p in s.split("_") if p]
+
+                    ch = None
+                    band = None
+
+                    for p in parts:
+                        if p in ch_set:
+                            ch = p
+                            break
+
+                    for p in parts:
+                        if p in band_keys:
+                            band = p
+                            break
+
+                    return ch, band
+
+                parsed = [parse_feature(f) for f in df_imp["feature"].tolist()]
+                df_imp["ch"] = [p[0] for p in parsed]
+                df_imp["band"] = [p[1] for p in parsed]
+
+                df_cb = df_imp.dropna(subset=["ch", "band"]).copy()
+
+                if len(df_cb) == 0:
+                    st.info("No he podido inferir canal y banda desde los nombres de features, así que no puedo agregar por banda/canal.")
+                else:
+                    df_band = (
+                        df_cb.groupby("band", as_index=False)
+                        .agg(
+                            importance_mean=("importance_mean", "sum"),
+                            importance_std=("importance_std", "mean"),
+                            n_features=("feature", "count"),
+                        )
+                        .sort_values("importance_mean", ascending=False)
+                    )
+
+                    st.write("Importancia agregada por banda (suma de importancias medias):")
+                    st.dataframe(df_band, use_container_width=True)
+                    st.bar_chart(df_band.set_index("band")["importance_mean"])
+
+                    df_ch = (
+                        df_cb.groupby("ch", as_index=False)
+                        .agg(
+                            importance_mean=("importance_mean", "sum"),
+                            importance_std=("importance_std", "mean"),
+                            n_features=("feature", "count"),
+                        )
+                        .sort_values("importance_mean", ascending=False)
+                    )
+
+                    st.write("Importancia agregada por canal (suma de importancias medias):")
+                    st.dataframe(df_ch.head(20), use_container_width=True)
+                    st.bar_chart(df_ch.head(20).set_index("ch")["importance_mean"])
+
+    # --- 3) Descarga ---
+            st.download_button(
+                "Descargar importancias (CSV)",
+                data=df_imp.to_csv(index=False).encode("utf-8"),
+                file_name="feature_importance_permutation.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
 
 with tab4:
     st.subheader("Traveling Waves (con montaje)")
