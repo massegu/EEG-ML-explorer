@@ -1433,6 +1433,7 @@ with tab4:
     ax.tick_params(labelsize=8)
     fig_dbg.tight_layout(pad=0.2)
     st.pyplot(fig_dbg)
+    plt.close(fig_dbg)
 
     # -------------------------
     # Cache de fase (para no recalcular con cada frame)
@@ -1493,6 +1494,7 @@ with tab4:
         ax.set_title(f"t={t_vis:.1f}s  {band_name_used}", fontsize=9)
         fig_topo.tight_layout(pad=0.3)
         st.pyplot(fig_topo)
+        plt.close(fig_topo)
 
     with c2:
         st.caption("Vector (propagación)")
@@ -1524,39 +1526,33 @@ with tab4:
         axv.set_title(f"θ={theta:.2f} rad", fontsize=9)
         fig_vec.tight_layout(pad=0.2)
         st.pyplot(fig_vec)
+        plt.close(fig_vec)
 
-    # -------------------------
-    # Serie temporal dirección (compacta)  ✅ con placeholders
-    # -------------------------
-    ph_dir_caption = st.empty()
-    ph_dir_plot = st.empty()
-    ph_metrics = st.empty()
+        # -------------------------
+        # Serie temporal dirección (compacta) ✅ con placeholders
+        # -------------------------
+        ph_dir_caption = st.empty()
+        ph_dir_plot = st.empty()
+        ph_metrics = st.empty()
 
-    ph_dir_caption.caption("Dirección (θ) en el tiempo — línea roja = instante actual")
+        ph_dir_caption.caption(
+            "Dirección (θ) en el tiempo — línea roja = instante actual"
+        )
 
-    fig_dir, ax = plt.subplots(figsize=(6.0, 1.6), dpi=130)
-    ax.plot(out["times"], theta_sm, lw=1)
-    ax.axvline(t_vis, color="r", lw=1, alpha=0.6)
-    ax.set_xlabel("t (s)", fontsize=9)
-    ax.set_ylabel("θ (rad)", fontsize=9)
-    ax.tick_params(labelsize=8)
-    fig_dir.tight_layout(pad=0.3)
+        fig_dir, ax = plt.subplots(figsize=(6.0, 1.6), dpi=130)
+        ax.plot(out["times"], theta_sm, lw=1)
+        ax.axvline(t_vis, color="r", lw=1, alpha=0.6)
+        ax.set_xlabel("t (s)", fontsize=9)
+        ax.set_ylabel("θ (rad)", fontsize=9)
+        ax.tick_params(labelsize=8)
+        fig_dir.tight_layout(pad=0.3)
 
-    ph_dir_caption.caption("Dirección (θ) en el tiempo — línea roja = instante actual")
+        ph_dir_plot.pyplot(fig_dir)
+        plt.close(fig_dir)  # ✅ importante con rerun/play
 
-    fig_dir, ax = plt.subplots(figsize=(6.0, 1.6), dpi=130)
-    ax.plot(out["times"], theta_sm, lw=1)
-    ax.axvline(t_vis, color="r", lw=1, alpha=0.6)
-    ax.set_xlabel("t (s)", fontsize=9)
-    ax.set_ylabel("θ (rad)", fontsize=9)
-    ax.tick_params(labelsize=8)
-    fig_dir.tight_layout(pad=0.3)
-    ph_dir_plot.pyplot(fig_dir)
-    plt.close(fig_dir)  # ✅ importante con rerun/play
-
-    ph_metrics.caption(
-        f"t={t_vis:.2f}s | θ={theta:.2f} rad | |k|={kmag:.3g} | speed={spd:.3g}"
-    )
+        ph_metrics.caption(
+            f"t={t_vis:.2f}s | θ={theta:.2f} rad | |k|={kmag:.3g} | speed={spd:.3g}"
+        )
 
     # -------------------------
     # Export GIF (vector + trail)
