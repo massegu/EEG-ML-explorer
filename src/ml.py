@@ -61,7 +61,9 @@ def evaluate_models(X: np.ndarray, y: np.ndarray, task: str, cv: int = 5) -> MLR
         s = cross_val_score(pipe, X, y, cv=cv, scoring=scoring)
         scores[name] = float(np.mean(s))
 
-    best_name = max(scores, key=scores.get)
+    best_name = max(
+        scores, key=scores.get
+    )  # pyright: ignore[reportArgumentType, reportCallIssue]
     best_estimator = pipes[best_name]  # el pipeline ganador aún sin entrenar "final"
     return MLResult(scores=scores, best_name=best_name, best_estimator=best_estimator)
 
