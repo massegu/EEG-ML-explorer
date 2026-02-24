@@ -346,7 +346,7 @@ with tab2:
             )
 
     # =========================================================
-    # Comparación A vs B (topomaps) ✅ (AQUÍ ya estamos a nivel tab2)
+    # Comparación A vs B (topomaps) 
     # =========================================================
     st.subheader("Comparación A vs B (topomaps)")
 
@@ -955,7 +955,7 @@ with tab3:
         plt.close(fig)
 
         # -------------------------
-        # Controles Permutation Importance (FUERA del botón)
+        # Controles Permutation Importance 
         # -------------------------
         # -------------------------
         # Importancia de variables (Permutation Importance)
