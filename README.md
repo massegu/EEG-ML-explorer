@@ -81,7 +81,7 @@ streamlit run app.py
 
 Puedes probar la aplicación aquí:
 
-👉 [EEG-Ml-Explorer](massegu-eeg-ml-explorer-app-zvqz78.streamlit.app)
+👉 [EEG-Ml-Explorer](https://massegu-eeg-ml-explorer-app-zvqz78.streamlit.app)
 
 
 ## 🧩 Funcionalidades principales
